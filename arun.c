@@ -1,11 +1,20 @@
+#include <X11/Xlib.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
 #include <X11/Xlib-xcb.h>
+#include <X11/XKBlib.h>
 #include <X11/Xft/Xft.h>
+#include <X11/keysym.h>
+#include <xcb/xcb.h>
 
 #define MAX_INPUT_SIZE 256
 #define VALUE_LIST_SIZE 32
+
+#define WINDOW_WIDTH 200
+#define WINDOW_HEIGHT 400
+
+#define INPUT_HEIGHT 23
 
 typedef struct {
     uint16_t width;
@@ -23,13 +32,13 @@ static Colormap cmap;
 static xcb_connection_t *c;
 static xcb_screen_t *scr;
 static xcb_window_t root;
+static xcb_generic_event_t *ev;
 
-static xcb_gcontext_t gc;
 static xcb_window_t wid;
 
-static uint16_t window_width;
-static uint16_t window_height;
 static input_bar_t input_bar = {0};
+static xcb_gcontext_t input_bar_gc;
+static xcb_gcontext_t cursor_gc;
 
 static const char *fontname = "Adwaita Mono:size=13.5";
 static XftFont *font;
@@ -44,6 +53,14 @@ static void die(const char *msg)
     fprintf(stderr, "%s", msg);
     exit(1);
 }
+
+static void cleanup(void)
+{
+    XftColorFree(dpy, visual, cmap, &font_color);
+    XftDrawDestroy(font_draw);
+    xcb_destroy_window(c, wid);
+    XCloseDisplay(dpy);
+}    
 
 static void setup_x11(void)
 {
@@ -89,7 +106,7 @@ static void setup_window(void)
         XCB_COPY_FROM_PARENT,
         wid,
         root,
-        1920 + 1920/2 - 200/2, 1080/2 - 400 / 2, 200, 400, 0,
+        1920 + 1920/2 - WINDOW_WIDTH/2, 1080/2 - WINDOW_HEIGHT/2, WINDOW_WIDTH, WINDOW_HEIGHT, 0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         scr->root_visual,
         value_mask, value_list
@@ -98,12 +115,19 @@ static void setup_window(void)
 
 static void setup_gc(void)
 {
-    gc = xcb_generate_id(c);
+    input_bar_gc = xcb_generate_id(c);
 
     value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
     value_list[0] = scr->black_pixel;
     value_list[1] = 0;
-    xcb_create_gc(c, gc, root, value_mask, value_list);
+    xcb_create_gc(c, input_bar_gc, root, value_mask, value_list);
+
+    cursor_gc = xcb_generate_id(c);
+
+    value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+    value_list[0] = scr->white_pixel;
+    value_list[1] = 0;
+    xcb_create_gc(c, cursor_gc, root, value_mask, value_list);
 }
 
 static void draw_input_bar(void)
@@ -115,26 +139,61 @@ static void draw_input_bar(void)
     xcb_poly_fill_rectangle(
         c,
         wid,
-        gc,
+        input_bar_gc,
         1,
         rectangle
     );
 
-    XftDrawStringUtf8(font_draw, &font_color, font, 10, 17, (const FcChar8 *)"Hello Xft!", 10);
+    XftDrawStringUtf8(font_draw, &font_color, font, 10, font->height-2, (const FcChar8 *)input_bar.buf, input_bar.top);
+
+    
+    const xcb_rectangle_t cursor[] = {
+        {10+font->max_advance_width*input_bar.top, 2, 1, font->height}
+    };
+    
+    xcb_poly_fill_rectangle(
+        c,
+        wid,
+        cursor_gc,
+        1,
+        cursor
+    );
 
     XFlush(dpy);
     xcb_flush(c);
 }
 
+static void handle_key_press(xcb_generic_event_t *ev)
+{
+    xcb_key_press_event_t *e = (xcb_key_press_event_t *)ev;
+
+    KeySym keysym = XkbKeycodeToKeysym(dpy, e->detail, 0, 0);
+
+    if (keysym == XK_BackSpace) {
+        if (input_bar.top > 0) {
+            input_bar.top--;
+        }
+        return;
+    }
+
+    if (keysym == XK_Escape) {
+        cleanup();
+        exit(1);
+        return;
+    }
+
+    if (keysym == XK_space) {
+        input_bar.buf[input_bar.top++] = ' ';
+        return;
+    }
+
+    char *str = XKeysymToString(keysym);
+
+    input_bar.buf[input_bar.top++] = str[0];
+}    
+
 int main(void)
 {
-    window_width = 200;
-    window_height = 400;
-
-    input_bar.width = window_width;
-    input_bar.height = 20;
-    input_bar.top = 0;
-    input_bar.cursor = 0;
 
     setup_x11();
 
@@ -144,31 +203,35 @@ int main(void)
 
     setup_font();
 
+    input_bar.width = WINDOW_WIDTH;
+    input_bar.height = font->height + 5;
+    input_bar.top = 0;
+    input_bar.cursor = 0;
+
     xcb_map_window(c, wid);
+
+    xcb_set_input_focus(c, XCB_INPUT_FOCUS_POINTER_ROOT, wid, XCB_CURRENT_TIME);
 
     xcb_flush(c);
 
-    bool focused = false;
-    xcb_generic_event_t *ev;
-    while (c && !xcb_connection_has_error(c) && !focused) {
+    while (c && !xcb_connection_has_error(c)) {
         ev = xcb_wait_for_event(c);
         switch (ev->response_type & ~0x80) {
         case XCB_EXPOSE:
             draw_input_bar();
             break;
         case XCB_KEY_PRESS:
+            handle_key_press(ev);
+            draw_input_bar();
             break;
         case XCB_FOCUS_OUT:
-            focused = true;
+            cleanup();
+            exit(1);          
             break;
         }
         free(ev);
     }
-    
-    XftColorFree(dpy, visual, cmap, &font_color);
-    XftDrawDestroy(font_draw);
-    xcb_destroy_window(c, wid);
-    xcb_disconnect(c);
-    XCloseDisplay(dpy);
+
+    cleanup();
     return 0;
 }
