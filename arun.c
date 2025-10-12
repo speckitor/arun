@@ -1,17 +1,21 @@
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include <xcb/xcb.h>
+#include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
 #include <X11/XKBlib.h>
 #include <X11/Xft/Xft.h>
 #include <X11/keysym.h>
-#include <xcb/xcb.h>
+#include <xcb/xproto.h>
 
 #define MAX_INPUT_SIZE 256
 #define VALUE_LIST_SIZE 32
 
-#define WINDOW_WIDTH 200
+#define WINDOW_WIDTH 300
 #define WINDOW_HEIGHT 400
 
 #define INPUT_HEIGHT 23
@@ -130,6 +134,26 @@ static void setup_gc(void)
     xcb_create_gc(c, cursor_gc, root, value_mask, value_list);
 }
 
+static XKeyEvent cast_key_press_event(xcb_key_press_event_t *e)
+{
+    XKeyEvent xkey;
+    xkey.display = dpy;
+    xkey.window = e->event;
+    xkey.root = e->root;
+    xkey.subwindow = e->child;
+    xkey.time = e->time;
+    xkey.x = e->event_x;
+    xkey.y = e->event_y;
+    xkey.x_root = e->root_x;
+    xkey.y_root = e->root_y;
+    xkey.state = e->state;
+    xkey.keycode = e->detail;
+    xkey.same_screen = e->same_screen;
+    xkey.type = KeyPress;
+
+    return xkey;
+}
+
 static void draw_input_bar(void)
 {
     const xcb_rectangle_t rectangle[] = {
@@ -145,7 +169,6 @@ static void draw_input_bar(void)
     );
 
     XftDrawStringUtf8(font_draw, &font_color, font, 10, font->height-2, (const FcChar8 *)input_bar.buf, input_bar.top);
-
     
     const xcb_rectangle_t cursor[] = {
         {10+font->max_advance_width*input_bar.top, 2, 1, font->height}
@@ -165,9 +188,11 @@ static void draw_input_bar(void)
 
 static void handle_key_press(xcb_generic_event_t *ev)
 {
-    xcb_key_press_event_t *e = (xcb_key_press_event_t *)ev;
+    XKeyEvent e = cast_key_press_event((xcb_key_press_event_t*) ev);
 
-    KeySym keysym = XkbKeycodeToKeysym(dpy, e->detail, 0, 0);
+    char buf[64];
+    KeySym keysym;
+    int len = XLookupString(&e, buf, sizeof(buf), &keysym, NULL);
 
     if (keysym == XK_BackSpace) {
         if (input_bar.top > 0) {
@@ -187,14 +212,13 @@ static void handle_key_press(xcb_generic_event_t *ev)
         return;
     }
 
-    char *str = XKeysymToString(keysym);
-
-    input_bar.buf[input_bar.top++] = str[0];
+    if (isprint(buf[0])) {
+        input_bar.buf[input_bar.top++] = buf[0];
+    }
 }    
 
 int main(void)
 {
-
     setup_x11();
 
     setup_window();
