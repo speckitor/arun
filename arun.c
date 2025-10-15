@@ -3,7 +3,9 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <unistd.h>
 
+#include <string.h>
 #include <xcb/xcb.h>
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
@@ -64,7 +66,17 @@ static void cleanup(void)
     XftDrawDestroy(font_draw);
     xcb_destroy_window(c, wid);
     XCloseDisplay(dpy);
-}    
+}
+
+static void run_command(void)
+{
+    if (fork() == 0) {
+        execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
+        _exit(EXIT_FAILURE);
+    }
+    cleanup();
+    exit(0);
+}
 
 static void setup_x11(void)
 {
@@ -110,7 +122,7 @@ static void setup_window(void)
         XCB_COPY_FROM_PARENT,
         wid,
         root,
-        1920 + 1920/2 - WINDOW_WIDTH/2, 1080/2 - WINDOW_HEIGHT/2, WINDOW_WIDTH, WINDOW_HEIGHT, 0,
+        1920/2 - WINDOW_WIDTH/2, 1080/2 - WINDOW_HEIGHT/2, WINDOW_WIDTH, WINDOW_HEIGHT, 0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         scr->root_visual,
         value_mask, value_list
@@ -171,7 +183,7 @@ static void draw_input_bar(void)
     XftDrawStringUtf8(font_draw, &font_color, font, 10, font->height-2, (const FcChar8 *)input_bar.buf, input_bar.top);
     
     const xcb_rectangle_t cursor[] = {
-        {10+font->max_advance_width*input_bar.top, 2, 1, font->height}
+        {10+font->max_advance_width*input_bar.cursor, 2, 1, font->height}
     };
     
     xcb_poly_fill_rectangle(
@@ -194,8 +206,32 @@ static void handle_key_press(xcb_generic_event_t *ev)
     KeySym keysym;
     int len = XLookupString(&e, buf, sizeof(buf), &keysym, NULL);
 
+    if (keysym == XK_Return) {
+        run_command();
+        input_bar.top = 0;
+        input_bar.cursor = 0;
+        return;
+    }
+
+    if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
+        input_bar.cursor++;
+        return;
+    }
+
+    if (keysym == XK_Left && input_bar.cursor > 0) {
+        input_bar.cursor--;
+        return;
+    }
+
+    if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
+        input_bar.cursor++;
+        return;
+    }
+
     if (keysym == XK_BackSpace) {
-        if (input_bar.top > 0) {
+        if (input_bar.cursor) {
+            memccpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
+            input_bar.cursor--;
             input_bar.top--;
         }
         return;
@@ -207,13 +243,10 @@ static void handle_key_press(xcb_generic_event_t *ev)
         return;
     }
 
-    if (keysym == XK_space) {
-        input_bar.buf[input_bar.top++] = ' ';
-        return;
-    }
-
-    if (isprint(buf[0])) {
-        input_bar.buf[input_bar.top++] = buf[0];
+    if (isprint(buf[0]) && input_bar.top < MAX_INPUT_SIZE) {
+        memccpy(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
+        input_bar.buf[input_bar.cursor++] = buf[0];
+        input_bar.top++;
     }
 }    
 
