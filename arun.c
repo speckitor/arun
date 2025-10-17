@@ -1,11 +1,10 @@
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
-
 #include <string.h>
+#include <dirent.h>
+
 #include <xcb/xcb.h>
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
@@ -14,13 +13,13 @@
 #include <X11/keysym.h>
 #include <xcb/xproto.h>
 
+#define MAX_EXES_NUMBER 16384
+
 #define MAX_INPUT_SIZE 256
 #define VALUE_LIST_SIZE 32
 
 #define WINDOW_WIDTH 300
 #define WINDOW_HEIGHT 400
-
-#define INPUT_HEIGHT 23
 
 typedef struct {
     uint16_t width;
@@ -29,6 +28,9 @@ typedef struct {
     size_t top;
     size_t cursor;
 } input_bar_t;
+
+static char *exes[16384];
+static size_t exe_top = 0;
 
 static Display *dpy;
 static int xlib_scr;
@@ -39,6 +41,8 @@ static xcb_connection_t *c;
 static xcb_screen_t *scr;
 static xcb_window_t root;
 static xcb_generic_event_t *ev;
+
+static xcb_get_input_focus_reply_t *last_focus;
 
 static xcb_window_t wid;
 
@@ -62,6 +66,9 @@ static void die(const char *msg)
 
 static void cleanup(void)
 {
+    if (last_focus) {
+        xcb_set_input_focus(c, XCB_INPUT_FOCUS_POINTER_ROOT, last_focus->focus, XCB_CURRENT_TIME);
+    }
     XftColorFree(dpy, visual, cmap, &font_color);
     XftDrawDestroy(font_draw);
     xcb_destroy_window(c, wid);
@@ -70,12 +77,44 @@ static void cleanup(void)
 
 static void run_command(void)
 {
-    if (fork() == 0) {
-        execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
-        _exit(EXIT_FAILURE);
-    }
     cleanup();
-    exit(0);
+    execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
+}
+
+static void parce_dir(char *dirpath)
+{
+    DIR *dir = opendir(dirpath);
+
+    if (!dir) return; 
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, "..") == 0) continue;
+        if (strcmp(entry->d_name, ".") == 0) continue;
+        exes[exe_top++] = entry->d_name;
+    }
+
+    closedir(dir);
+}
+
+static void setup_exes(void)
+{
+    char *res = getenv("PATH");
+    char buf[1024];
+    size_t cursor = 0;
+    for (size_t i = 0; i < strlen(res); ++cursor, ++i) {
+        if (res[i] == ':') {
+            buf[cursor] = '\0';
+            parce_dir(buf);
+            cursor = -1;
+        } else {
+            buf[cursor] = res[i];
+        }
+    }
+
+    // for (size_t i = 0; i < exe_top; ++i) {
+    //     printf("%s\n", exes[i]);
+    // }
 }
 
 static void setup_x11(void)
@@ -230,6 +269,7 @@ static void handle_key_press(xcb_generic_event_t *ev)
 
     if (keysym == XK_BackSpace) {
         if (input_bar.cursor) {
+            input_bar.buf[input_bar.top] = '\0';
             memccpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
             input_bar.cursor--;
             input_bar.top--;
@@ -252,6 +292,8 @@ static void handle_key_press(xcb_generic_event_t *ev)
 
 int main(void)
 {
+    setup_exes();
+
     setup_x11();
 
     setup_window();
@@ -267,6 +309,7 @@ int main(void)
 
     xcb_map_window(c, wid);
 
+    last_focus = xcb_get_input_focus_reply(c, xcb_get_input_focus(c), NULL);
     xcb_set_input_focus(c, XCB_INPUT_FOCUS_POINTER_ROOT, wid, XCB_CURRENT_TIME);
 
     xcb_flush(c);
