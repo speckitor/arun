@@ -15,11 +15,11 @@
 
 #define MAX_EXES_NUMBER 16384
 
-#define MAX_INPUT_SIZE 256
-#define VALUE_LIST_SIZE 32
-
 #define WINDOW_WIDTH 300
 #define WINDOW_HEIGHT 400
+
+#define MAX_INPUT_SIZE 256
+#define VALUE_LIST_SIZE 32
 
 typedef struct {
     uint16_t width;
@@ -49,6 +49,8 @@ static xcb_window_t wid;
 static input_bar_t input_bar = {0};
 static xcb_gcontext_t input_bar_gc;
 static xcb_gcontext_t cursor_gc;
+static xcb_gcontext_t exes_gc;
+static xcb_gcontext_t selected_gc;
 
 static const char *fontname = "Adwaita Mono:size=13.5";
 static XftFont *font;
@@ -183,6 +185,13 @@ static void setup_gc(void)
     value_list[0] = scr->white_pixel;
     value_list[1] = 0;
     xcb_create_gc(c, cursor_gc, root, value_mask, value_list);
+
+    exes_gc = xcb_generate_id(c);
+
+    value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+    value_list[0] = scr->black_pixel;
+    value_list[1] = 0;
+    xcb_create_gc(c, exes_gc, root, value_mask, value_list);
 }
 
 static XKeyEvent cast_key_press_event(xcb_key_press_event_t *e)
@@ -235,6 +244,21 @@ static void draw_input_bar(void)
 
     XFlush(dpy);
     xcb_flush(c);
+}
+
+static void draw_exes(void)
+{
+    const xcb_rectangle_t rectangle[] = {
+        {0, 0, input_bar.width, input_bar.height}
+    };
+    
+    xcb_poly_fill_rectangle(
+        c,
+        wid,
+        input_bar_gc,
+        1,
+        rectangle
+    );
 }
 
 static void handle_key_press(xcb_generic_event_t *ev)
@@ -326,7 +350,7 @@ int main(void)
             break;
         case XCB_FOCUS_OUT:
             cleanup();
-            exit(1);          
+            exit(1);
             break;
         }
         free(ev);
