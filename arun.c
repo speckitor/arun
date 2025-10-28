@@ -13,10 +13,9 @@
 #include <X11/keysym.h>
 #include <xcb/xproto.h>
 
-#define MAX_EXES_NUMBER 16384
+#include "config.h"
 
-#define WINDOW_WIDTH 300
-#define WINDOW_HEIGHT 400
+#define MAX_BINS_NUMBER 16384
 
 #define MAX_INPUT_SIZE 256
 #define VALUE_LIST_SIZE 32
@@ -29,8 +28,8 @@ typedef struct {
     size_t cursor;
 } input_bar_t;
 
-static char *exes[16384];
-static size_t exe_top = 0;
+static char *bins[16384];
+static size_t bin_top = 0;
 
 static Display *dpy;
 static int xlib_scr;
@@ -45,17 +44,20 @@ static xcb_generic_event_t *ev;
 static xcb_get_input_focus_reply_t *last_focus;
 
 static xcb_window_t wid;
+static int window_width;
+static int window_height;
 
 static input_bar_t input_bar = {0};
 static xcb_gcontext_t input_bar_gc;
 static xcb_gcontext_t cursor_gc;
-static xcb_gcontext_t exes_gc;
+static xcb_gcontext_t bins_gc;
 static xcb_gcontext_t selected_gc;
 
-static const char *fontname = "Adwaita Mono:size=13.5";
 static XftFont *font;
 static XftDraw *font_draw;
-static XftColor font_color;
+static XftColor input_font_color;
+static XftColor bin_font_color;
+static XftColor selected_font_color;
 
 static uint32_t value_mask;
 static uint32_t value_list[VALUE_LIST_SIZE];
@@ -71,7 +73,9 @@ static void cleanup(void)
     if (last_focus) {
         xcb_set_input_focus(c, XCB_INPUT_FOCUS_POINTER_ROOT, last_focus->focus, XCB_CURRENT_TIME);
     }
-    XftColorFree(dpy, visual, cmap, &font_color);
+    XftColorFree(dpy, visual, cmap, &input_font_color);
+    XftColorFree(dpy, visual, cmap, &bin_font_color);
+    XftColorFree(dpy, visual, cmap, &selected_font_color);
     XftDrawDestroy(font_draw);
     xcb_destroy_window(c, wid);
     XCloseDisplay(dpy);
@@ -93,13 +97,13 @@ static void parce_dir(char *dirpath)
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, "..") == 0) continue;
         if (strcmp(entry->d_name, ".") == 0) continue;
-        exes[exe_top++] = entry->d_name;
+        bins[bin_top++] = entry->d_name;
     }
 
     closedir(dir);
 }
 
-static void setup_exes(void)
+static void setup_bins(void)
 {
     char *res = getenv("PATH");
     char buf[1024];
@@ -114,8 +118,8 @@ static void setup_exes(void)
         }
     }
 
-    // for (size_t i = 0; i < exe_top; ++i) {
-    //     printf("%s\n", exes[i]);
+    // for (size_t i = 0; i < bin_top; ++i) {
+    //     printf("%s\n", bins[i]);
     // }
 }
 
@@ -142,19 +146,33 @@ static void setup_font(void)
     if (!font) {
         die("Failed to open font\n");
     }
-    if (!XftColorAllocName(dpy, visual, cmap, "#ffffff", &font_color)) {
+
+    if ((!XftColorAllocName(dpy, visual, cmap, input_fg_color, &input_font_color)) ||
+        (!XftColorAllocName(dpy, visual, cmap, bin_fg_color, &bin_font_color)) ||
+        (!XftColorAllocName(dpy, visual, cmap, selected_bin_fg_color, &selected_font_color))) {
         die("Failed to allocate font color\n");
     }
-    
+
+    /*
+     * have to generate window id earlier that setup window
+     * to create draw and then use `font` variable to setup window width and height
+     */
+
+    wid = xcb_generate_id(c);
+
     font_draw = XftDrawCreate(dpy, wid, visual, cmap);
+    if (!font_draw) {
+        die("Failed to allocate font draw\n");
+    }
 }
 
 static void setup_window(void)
 {
-    wid = xcb_generate_id(c);
+    window_width = TEXT_OFFSET_X * 2 + TEXT_LENGTH * font->max_advance_width;
+    window_height = (TEXT_OFFSET_Y * 2 + font->height) * (COMPLETIONS_NUMBER + 1);
 
     value_mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
-    value_list[0] = 0xFF0000;
+    value_list[0] = BG_COLOR;
     value_list[1] = 1;
     value_list[2] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_FOCUS_CHANGE;
 
@@ -163,35 +181,35 @@ static void setup_window(void)
         XCB_COPY_FROM_PARENT,
         wid,
         root,
-        1920/2 - WINDOW_WIDTH/2, 1080/2 - WINDOW_HEIGHT/2, WINDOW_WIDTH, WINDOW_HEIGHT, 0,
+        1920/2 - window_width/2, 1080/2 - window_height/2, window_width, window_height, 0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         scr->root_visual,
         value_mask, value_list
     );
 }
 
-static void setup_gc(void)
+static void setup_gcs(void)
 {
     input_bar_gc = xcb_generate_id(c);
 
     value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-    value_list[0] = scr->black_pixel;
+    value_list[0] = INPUT_BG_COLOR;
     value_list[1] = 0;
     xcb_create_gc(c, input_bar_gc, root, value_mask, value_list);
 
     cursor_gc = xcb_generate_id(c);
 
     value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-    value_list[0] = scr->white_pixel;
+    value_list[0] = INPUT_CURSOR_COLOR;
     value_list[1] = 0;
     xcb_create_gc(c, cursor_gc, root, value_mask, value_list);
 
-    exes_gc = xcb_generate_id(c);
+    bins_gc = xcb_generate_id(c);
 
     value_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-    value_list[0] = scr->black_pixel;
+    value_list[0] = BIN_BG_COLOR;
     value_list[1] = 0;
-    xcb_create_gc(c, exes_gc, root, value_mask, value_list);
+    xcb_create_gc(c, bins_gc, root, value_mask, value_list);
 }
 
 static XKeyEvent cast_key_press_event(xcb_key_press_event_t *e)
@@ -219,7 +237,7 @@ static void draw_input_bar(void)
     const xcb_rectangle_t rectangle[] = {
         {0, 0, input_bar.width, input_bar.height}
     };
-    
+
     xcb_poly_fill_rectangle(
         c,
         wid,
@@ -228,12 +246,14 @@ static void draw_input_bar(void)
         rectangle
     );
 
-    XftDrawStringUtf8(font_draw, &font_color, font, 10, font->height-2, (const FcChar8 *)input_bar.buf, input_bar.top);
-    
+    XftDrawStringUtf8(font_draw, &input_font_color, font, TEXT_OFFSET_X, TEXT_OFFSET_Y + (font->height / 1.25), (const FcChar8 *)input_bar.buf, input_bar.top);
+
     const xcb_rectangle_t cursor[] = {
-        {10+font->max_advance_width*input_bar.cursor, 2, 1, font->height}
+        {TEXT_OFFSET_X + font->max_advance_width * input_bar.cursor, TEXT_OFFSET_Y, 1, font->height}
     };
-    
+
+    XFlush(dpy);
+
     xcb_poly_fill_rectangle(
         c,
         wid,
@@ -246,19 +266,8 @@ static void draw_input_bar(void)
     xcb_flush(c);
 }
 
-static void draw_exes(void)
+static void draw_bins(void)
 {
-    const xcb_rectangle_t rectangle[] = {
-        {0, 0, input_bar.width, input_bar.height}
-    };
-    
-    xcb_poly_fill_rectangle(
-        c,
-        wid,
-        input_bar_gc,
-        1,
-        rectangle
-    );
 }
 
 static void handle_key_press(xcb_generic_event_t *ev)
@@ -293,9 +302,9 @@ static void handle_key_press(xcb_generic_event_t *ev)
 
     if (keysym == XK_BackSpace) {
         if (input_bar.cursor) {
-            input_bar.buf[input_bar.top] = '\0';
-            memccpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
+            memcpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
             input_bar.cursor--;
+            input_bar.buf[input_bar.top - 1] = '\0';
             input_bar.top--;
         }
         return;
@@ -312,22 +321,18 @@ static void handle_key_press(xcb_generic_event_t *ev)
         input_bar.buf[input_bar.cursor++] = buf[0];
         input_bar.top++;
     }
-}    
+}
 
 int main(void)
 {
-    setup_exes();
-
+    setup_bins();
     setup_x11();
-
+    setup_gcs();
+    setup_font();
     setup_window();
 
-    setup_gc();
-
-    setup_font();
-
-    input_bar.width = WINDOW_WIDTH;
-    input_bar.height = font->height + 5;
+    input_bar.width = window_width;
+    input_bar.height = font->height + TEXT_OFFSET_Y * 2;
     input_bar.top = 0;
     input_bar.cursor = 0;
 
