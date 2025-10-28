@@ -33,7 +33,7 @@ typedef struct {
 typedef struct {
     const char *all[MAX_BINS_SIZE];
     size_t top;
-    const char *displayed[COMPLETIONS_NUMBER];
+    const char *drawable[MAX_BINS_SIZE];
     size_t cursor;
 } bins_t;
 
@@ -96,8 +96,14 @@ static void cleanup(void)
 
 static void run_command(void)
 {
+    const char *selected = strdup(bins.drawable[bins.cursor]);
     cleanup();
-    execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
+    if (strstr(selected, input_bar.buf) != NULL) {
+        execl("/bin/sh", "sh", "-c", selected, (char *)NULL);
+    } else {
+        execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
+    }
+    free(selected);
 }
 
 static void parce_dir(char *dirpath)
@@ -286,7 +292,7 @@ static void draw_bin(const char *cmd, bool selected, int y)
             bin_rect
         );
 
-        XftDrawStringUtf8(font_draw, &selected_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, len < TEXT_LENGTH ? len : TEXT_LENGTH);
+        XftDrawStringUtf8(font_draw, &selected_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, MIN(len, TEXT_LENGTH));
     } else {
         xcb_poly_fill_rectangle(
             c,
@@ -296,7 +302,7 @@ static void draw_bin(const char *cmd, bool selected, int y)
             bin_rect
         );
 
-        XftDrawStringUtf8(font_draw, &bin_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, len < TEXT_LENGTH ? len : TEXT_LENGTH);
+        XftDrawStringUtf8(font_draw, &bin_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, MIN(len, TEXT_LENGTH));
     }
 
     XFlush(dpy);
@@ -305,17 +311,20 @@ static void draw_bin(const char *cmd, bool selected, int y)
 
 static void draw_bins(void)
 {
-    int dy = 2 * TEXT_OFFSET_Y + font->height;
     int drawn = 0;
     printf("Draiwing bins\n");
     for (size_t i = 0; i < bins.top && drawn < COMPLETIONS_NUMBER; ++i) {
         if (strstr(bins.all[i], input_bar.buf) != NULL) {
-            bins.displayed[drawn] = bins.all[i];
-            printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.all[i]);
-            draw_bin(bins.all[i], drawn == bins.cursor, dy);
-            dy += 2 * TEXT_OFFSET_Y + font->height;
+            bins.drawable[drawn] = bins.all[i];
             drawn++;
         }
+    }
+
+    int dy = 2 * TEXT_OFFSET_Y + font->height;
+    for (size_t i = 0; i < MIN(drawn, COMPLETIONS_NUMBER); ++i) {
+        printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
+        draw_bin(bins.drawable[i], bins.cursor == i, dy);
+        dy += 2 * TEXT_OFFSET_Y + font->height;
     }
 
     if (drawn < COMPLETIONS_NUMBER) {
