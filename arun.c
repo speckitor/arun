@@ -361,7 +361,7 @@ static void draw_bin(const char *cmd, bool selected, int y)
 
 static void redraw_all() {
     int dy = 2 * TEXT_OFFSET_Y + font->height;
-    for (size_t i = bins.rrange_s; i <= bins.rrange_e; ++i) {
+    for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
         printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
         draw_bin(bins.drawable[i], bins.cursor == i, dy);
         dy += 2 * TEXT_OFFSET_Y + font->height;
@@ -370,7 +370,7 @@ static void redraw_all() {
 
 static void redraw_diff() {
     int dy = 2 * TEXT_OFFSET_Y + font->height;
-    for (size_t i = bins.rrange_s; i <= bins.rrange_e; ++i) {
+    for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
         if (i == bins.cursor || i == bins.prevcursor) {
             printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
             draw_bin(bins.drawable[i], bins.cursor == i, dy);
