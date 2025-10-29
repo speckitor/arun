@@ -28,6 +28,8 @@ typedef struct {
     char buf[MAX_INPUT_SIZE];
     size_t top;
     size_t cursor;
+    size_t rrange_s;
+    size_t rrange_e;
 } input_bar_t;
 
 typedef struct {
@@ -154,6 +156,8 @@ static void setup(void)
 
     bins.rrange_e = COMPLETIONS_NUMBER;
 
+    input_bar.rrange_e = TEXT_LENGTH;
+
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
         die("Failed to open X11 display\n");
@@ -268,18 +272,27 @@ static void draw_input_bar(void)
         rectangle
     );
 
+    if (input_bar.cursor > input_bar.rrange_e) {
+        input_bar.rrange_s++;
+        input_bar.rrange_e++;
+    } else if (input_bar.cursor < input_bar.rrange_s || (input_bar.top < input_bar.rrange_e && input_bar.top > TEXT_LENGTH - 1)) {
+        input_bar.rrange_s--;
+        input_bar.rrange_e--;
+    }
+
     XftDrawStringUtf8(
         font_draw,
         &input_font_color,
         font,
         TEXT_OFFSET_X,
         TEXT_OFFSET_Y + (font->height / 1.25),
-        (const FcChar8 *)input_bar.buf,
-        input_bar.top
+        (const FcChar8 *)&input_bar.buf[input_bar.rrange_s],
+        MIN(TEXT_LENGTH, input_bar.top)
     );
 
+    int cursor_factor = input_bar.cursor - input_bar.rrange_s;
     const xcb_rectangle_t cursor[] = {
-        {TEXT_OFFSET_X + font->max_advance_width * input_bar.cursor, TEXT_OFFSET_Y, 1, font->height}
+        {TEXT_OFFSET_X + font->max_advance_width * cursor_factor, TEXT_OFFSET_Y, 1, font->height}
     };
 
     XFlush(dpy);
@@ -447,7 +460,7 @@ static bool handle_key_press(xcb_generic_event_t *ev)
         bins.prevcursor = bins.cursor++;
     } else if (keysym == XK_Up && bins.cursor > 0) {
         bins.prevcursor = bins.cursor--;
-    } else if (keysym == XK_Right && input_bar.cursor + 1 < input_bar.top) {
+    } else if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
         input_bar.cursor++;
     } else if (keysym == XK_Left && input_bar.cursor > 0) {
         input_bar.cursor--;
