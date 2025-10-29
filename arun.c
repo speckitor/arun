@@ -96,6 +96,7 @@ static void cleanup(void)
     XftColorFree(dpy, visual, cmap, &bin_font_color);
     XftColorFree(dpy, visual, cmap, &selected_font_color);
     XftDrawDestroy(font_draw);
+    xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
     xcb_destroy_window(c, wid);
     XCloseDisplay(dpy);
 }
@@ -196,7 +197,7 @@ static void setup(void)
     value_mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
     value_list[0] = BG_COLOR;
     value_list[1] = 1;
-    value_list[2] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_FOCUS_CHANGE;
+    value_list[2] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_BUTTON_PRESS;
 
     xcb_create_window(
         c,
@@ -208,6 +209,8 @@ static void setup(void)
         scr->root_visual,
         value_mask, value_list
     );
+
+    xcb_grab_button(c, 0, root, XCB_EVENT_MASK_BUTTON_PRESS, XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_SYNC, XCB_NONE, XCB_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY);
 
     input_bar_gc = xcb_generate_id(c);
 
@@ -500,7 +503,7 @@ int main(void)
             draw_input_bar();
             draw_bins(parse_bins);
             break;
-        case XCB_FOCUS_OUT:
+        case XCB_BUTTON_PRESS:
             cleanup();
             exit(1);
             break;
