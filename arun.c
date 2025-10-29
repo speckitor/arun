@@ -34,7 +34,11 @@ typedef struct {
     const char *all[MAX_BINS_SIZE];
     size_t top;
     const char *drawable[MAX_BINS_SIZE];
+    size_t dtop;
     size_t cursor;
+    size_t prevcursor;
+    size_t rrange_s;
+    size_t rrange_e;
 } bins_t;
 
 static Display *dpy;
@@ -58,6 +62,7 @@ static xcb_gcontext_t input_bar_gc;
 static xcb_gcontext_t cursor_gc;
 
 static bins_t bins;
+static bool parse_bins;
 static xcb_gcontext_t bin_gc;
 static xcb_gcontext_t selected_gc;
 
@@ -85,7 +90,6 @@ static void cleanup(void)
     for (size_t i = 0; i < MAX_BINS_SIZE; ++i) {
         free(bins.all[i]);
     }
-
     XftColorFree(dpy, visual, cmap, &input_font_color);
     XftColorFree(dpy, visual, cmap, &bin_font_color);
     XftColorFree(dpy, visual, cmap, &selected_font_color);
@@ -104,6 +108,11 @@ static void run_command(void)
         execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
     }
     free(selected);
+}
+
+static int cmpstrs(const void *p1, const void *p2)
+{
+    return strcmp(*(const char **)p1, *(const char **)p2);
 }
 
 static void parce_dir(char *dirpath)
@@ -137,9 +146,13 @@ static void setup(void)
         }
     }
 
+    qsort(bins.all, bins.top, sizeof(char *), cmpstrs);
+
     // for (size_t i = 0; i < bin_top; ++i) {
     //     printf("%s\n", bins[i]);
     // }
+
+    bins.rrange_e = COMPLETIONS_NUMBER;
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -255,7 +268,15 @@ static void draw_input_bar(void)
         rectangle
     );
 
-    XftDrawStringUtf8(font_draw, &input_font_color, font, TEXT_OFFSET_X, TEXT_OFFSET_Y + (font->height / 1.25), (const FcChar8 *)input_bar.buf, input_bar.top);
+    XftDrawStringUtf8(
+        font_draw,
+        &input_font_color,
+        font,
+        TEXT_OFFSET_X,
+        TEXT_OFFSET_Y + (font->height / 1.25),
+        (const FcChar8 *)input_bar.buf,
+        input_bar.top
+    );
 
     const xcb_rectangle_t cursor[] = {
         {TEXT_OFFSET_X + font->max_advance_width * input_bar.cursor, TEXT_OFFSET_Y, 1, font->height}
@@ -292,7 +313,15 @@ static void draw_bin(const char *cmd, bool selected, int y)
             bin_rect
         );
 
-        XftDrawStringUtf8(font_draw, &selected_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, MIN(len, TEXT_LENGTH));
+        XftDrawStringUtf8(
+            font_draw,
+            &selected_font_color,
+            font,
+            TEXT_OFFSET_X,
+            y + font->height,
+            (const FcChar8 *)cmd,
+            MIN(len, TEXT_LENGTH)
+        );
     } else {
         xcb_poly_fill_rectangle(
             c,
@@ -302,35 +331,79 @@ static void draw_bin(const char *cmd, bool selected, int y)
             bin_rect
         );
 
-        XftDrawStringUtf8(font_draw, &bin_font_color, font, TEXT_OFFSET_X, y + (font->height / 1.25), (const FcChar8 *)cmd, MIN(len, TEXT_LENGTH));
+        XftDrawStringUtf8(
+            font_draw,
+            &bin_font_color,
+            font,
+            TEXT_OFFSET_X,
+            y + font->height,
+            (const FcChar8 *)cmd,
+            MIN(len, TEXT_LENGTH)
+        );
     }
 
     XFlush(dpy);
     xcb_flush(c);
 }
 
-static void draw_bins(void)
-{
-    int drawn = 0;
-    printf("Draiwing bins\n");
-    for (size_t i = 0; i < bins.top && drawn < COMPLETIONS_NUMBER; ++i) {
-        if (strstr(bins.all[i], input_bar.buf) != NULL) {
-            bins.drawable[drawn] = bins.all[i];
-            drawn++;
-        }
-    }
-
+static void redraw_all() {
     int dy = 2 * TEXT_OFFSET_Y + font->height;
-    for (size_t i = 0; i < MIN(drawn, COMPLETIONS_NUMBER); ++i) {
+    for (size_t i = bins.rrange_s; i <= bins.rrange_e; ++i) {
         printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
         draw_bin(bins.drawable[i], bins.cursor == i, dy);
         dy += 2 * TEXT_OFFSET_Y + font->height;
     }
+}
 
-    if (drawn < COMPLETIONS_NUMBER) {
+static void redraw_diff() {
+    int dy = 2 * TEXT_OFFSET_Y + font->height;
+    for (size_t i = bins.rrange_s; i <= bins.rrange_e; ++i) {
+        if (i == bins.cursor || i == bins.prevcursor) {
+            printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
+            draw_bin(bins.drawable[i], bins.cursor == i, dy);
+        }
+        dy += 2 * TEXT_OFFSET_Y + font->height;
+    }
+}
+
+static void draw_bins(bool parse_bins)
+{
+    printf("Draiwing bins\n");
+    if (parse_bins) {
+        bins.dtop = 0;
+        for (size_t i = 0; i < bins.top; ++i) {
+            if (strstr(bins.all[i], input_bar.buf) != NULL) {
+                bins.drawable[bins.dtop++] = bins.all[i];
+            }
+        }
+
+        if (bins.cursor > bins.dtop) {
+            bins.cursor = 0;
+            bins.prevcursor = 0;
+            bins.rrange_s = 0;
+            bins.rrange_e = COMPLETIONS_NUMBER - 1;
+        }
+    }
+
+    if (bins.cursor >= bins.rrange_e) {
+        bins.rrange_s++;
+        bins.rrange_e++;
+        redraw_all();
+    } else if (bins.cursor < bins.rrange_s) {
+        bins.rrange_s--;
+        bins.rrange_e--;
+        redraw_all();
+    } else if (parse_bins) {
+        redraw_all();
+    } else {
+        redraw_diff();
+    }
+
+    if (bins.dtop < COMPLETIONS_NUMBER) {
         printf("Clearing\n");
+        int dy = (bins.dtop + 1) * (2 * TEXT_OFFSET_Y + font->height); 
         const xcb_rectangle_t void_rect[] = {
-            {0, dy, window_width, (COMPLETIONS_NUMBER - drawn) * (2 * TEXT_OFFSET_Y + font->height)}
+            {0, dy, window_width, (COMPLETIONS_NUMBER - bins.dtop) * (2 * TEXT_OFFSET_Y + font->height)}
         };
 
         xcb_poly_fill_rectangle(
@@ -340,13 +413,12 @@ static void draw_bins(void)
             1,
             void_rect
         );
-
-        XFlush(dpy);
-        xcb_flush(c);
     }
+    XFlush(dpy);
+    xcb_flush(c);
 }
 
-static void handle_key_press(xcb_generic_event_t *ev)
+static bool handle_key_press(xcb_generic_event_t *ev)
 {
     XKeyEvent e = cast_key_press_event((xcb_key_press_event_t*) ev);
 
@@ -354,49 +426,37 @@ static void handle_key_press(xcb_generic_event_t *ev)
     KeySym keysym;
     int len = XLookupString(&e, buf, sizeof(buf), &keysym, NULL);
 
-    if (keysym == XK_Return) {
-        run_command();
-        input_bar.top = 0;
-        input_bar.cursor = 0;
-        return;
-    }
-
-    if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
-        input_bar.cursor++;
-        return;
-    }
-
-    if (keysym == XK_Left && input_bar.cursor > 0) {
-        input_bar.cursor--;
-        return;
-    }
-
-    if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
-        input_bar.cursor++;
-        return;
-    }
-
-    if (keysym == XK_BackSpace) {
+    if (isprint(buf[0]) && input_bar.top < MAX_INPUT_SIZE) {
+        memccpy(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
+        input_bar.buf[input_bar.cursor++] = buf[0];
+        input_bar.top++;
+        return true;
+    } else if (keysym == XK_BackSpace) {
         if (input_bar.cursor) {
             memcpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
             input_bar.cursor--;
             input_bar.buf[input_bar.top - 1] = '\0';
             input_bar.top--;
         }
-        return;
-    }
-
-    if (keysym == XK_Escape) {
+        return true;
+    } else if (keysym == XK_Return) {
+        run_command();
+        input_bar.top = 0;
+        input_bar.cursor = 0;
+    } else if (keysym == XK_Down && bins.cursor + 1 < bins.dtop) {
+        bins.prevcursor = bins.cursor++;
+    } else if (keysym == XK_Up && bins.cursor > 0) {
+        bins.prevcursor = bins.cursor--;
+    } else if (keysym == XK_Right && input_bar.cursor + 1 < input_bar.top) {
+        input_bar.cursor++;
+    } else if (keysym == XK_Left && input_bar.cursor > 0) {
+        input_bar.cursor--;
+    } else if (keysym == XK_Escape) {
         cleanup();
         exit(1);
-        return;
     }
 
-    if (isprint(buf[0]) && input_bar.top < MAX_INPUT_SIZE) {
-        memccpy(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
-        input_bar.buf[input_bar.cursor++] = buf[0];
-        input_bar.top++;
-    }
+    return false;
 }
 
 int main(void)
@@ -420,12 +480,12 @@ int main(void)
         switch (ev->response_type & ~0x80) {
         case XCB_EXPOSE:
             draw_input_bar();
-            draw_bins();
+            draw_bins(true);
             break;
         case XCB_KEY_PRESS:
-            handle_key_press(ev);
+            parse_bins = handle_key_press(ev);
             draw_input_bar();
-            draw_bins();
+            draw_bins(parse_bins);
             break;
         case XCB_FOCUS_OUT:
             cleanup();
