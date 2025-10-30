@@ -16,6 +16,7 @@
 #include "config.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 #define MAX_BINS_SIZE 16384
 
@@ -154,7 +155,7 @@ static void setup(void)
     // for (size_t i = 0; i < bin_top; ++i) {
     //     printf("%s\n", bins[i]);
     // }
-
+    
     bins.rrange_e = COMPLETIONS_NUMBER;
 
     input_bar.rrange_e = TEXT_LENGTH;
@@ -470,6 +471,27 @@ static bool handle_key_press(xcb_generic_event_t *ev)
     } else if (keysym == XK_Escape) {
         cleanup();
         exit(1);
+    } else if (e.state == XCB_MOD_MASK_CONTROL) {
+        switch (keysym) {
+        case 'f':
+            if (input_bar.cursor < input_bar.top) input_bar.cursor++;
+            break;
+        case 'b':
+            if (input_bar.cursor > 0) input_bar.cursor--;
+            break;
+        case 'a':
+            input_bar.cursor = 0;
+            input_bar.rrange_s = 0;
+            input_bar.rrange_e = TEXT_LENGTH;
+            break;
+        case 'e':
+            input_bar.cursor = input_bar.top;
+            if (input_bar.top > TEXT_LENGTH) {
+                input_bar.rrange_s = input_bar.top - TEXT_LENGTH;
+                input_bar.rrange_e = input_bar.top;
+            }
+            break;
+        }
     }
 
     return false;
