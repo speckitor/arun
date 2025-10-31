@@ -34,7 +34,7 @@ typedef struct {
 } input_bar_t;
 
 typedef struct {
-    const char *all[MAX_BINS_SIZE];
+    char *all[MAX_BINS_SIZE];
     size_t top;
     const char *drawable[MAX_BINS_SIZE];
     size_t dtop;
@@ -89,7 +89,6 @@ static void cleanup(void)
     if (last_focus) {
         xcb_set_input_focus(c, XCB_INPUT_FOCUS_POINTER_ROOT, last_focus->focus, XCB_CURRENT_TIME);
     }
-
     for (size_t i = 0; i < MAX_BINS_SIZE; ++i) {
         free(bins.all[i]);
     }
@@ -104,7 +103,7 @@ static void cleanup(void)
 
 static void run_command(void)
 {
-    const char *selected = strdup(bins.drawable[bins.cursor]);
+    char *selected = strdup(bins.drawable[bins.cursor]);
     cleanup();
     if (strstr(selected, input_bar.buf) != NULL) {
         execl("/bin/sh", "sh", "-c", selected, (char *)NULL);
@@ -125,11 +124,19 @@ static void parce_dir(char *dirpath)
 
     if (!dir) return; 
 
+    size_t i;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, "..") == 0) continue;
         if (strcmp(entry->d_name, ".") == 0) continue;
-        bins.all[bins.top++] = strdup(entry->d_name);
+        for (i = 0; i < bins.top; ++i) {
+            if (strcmp(bins.all[i], entry->d_name) == 0) {
+                break;
+            } 
+        }
+        if (bins.top == i) {
+            bins.all[bins.top++] = strdup(entry->d_name);
+        }
     }
 
     closedir(dir);
@@ -442,6 +449,7 @@ static bool handle_key_press(xcb_generic_event_t *ev)
     char buf[64];
     KeySym keysym;
     int len = XLookupString(&e, buf, sizeof(buf), &keysym, NULL);
+    (void)len;
 
     if (isprint(buf[0]) && input_bar.top < MAX_INPUT_SIZE) {
         memccpy(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
