@@ -405,7 +405,7 @@ static void draw_bins(bool parse_bins)
             bins.cursor = 0;
             bins.prevcursor = 0;
             bins.rrange_s = 0;
-            bins.rrange_e = COMPLETIONS_NUMBER - 1;
+            bins.rrange_e = COMPLETIONS_NUMBER;
         }
     }
 
