@@ -479,7 +479,7 @@ static bool handle_key_press(xcb_generic_event_t *ev)
     } else if (keysym == XK_Escape) {
         cleanup();
         exit(1);
-    } else if (e.state == XCB_MOD_MASK_CONTROL) {
+    } else if (e.state & XCB_MOD_MASK_CONTROL) {
         switch (keysym) {
         case 'f':
             if (input_bar.cursor < input_bar.top) input_bar.cursor++;
