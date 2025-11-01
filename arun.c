@@ -6,6 +6,7 @@
 #include <dirent.h>
 
 #include <xcb/xcb.h>
+#include <xcb/randr.h>
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
 #include <X11/XKBlib.h>
@@ -43,6 +44,11 @@ typedef struct {
     size_t rrange_s;
     size_t rrange_e;
 } bins_t;
+
+static int mon_x;
+static int mon_y;
+static int mon_width;
+static int mon_height;
 
 static Display *dpy;
 static int xlib_scr;
@@ -160,7 +166,6 @@ static void setup(void)
     qsort(bins.all, bins.top, sizeof(char *), cmpstrs);
     
     bins.rrange_e = COMPLETIONS_NUMBER;
-
     input_bar.rrange_e = TEXT_LENGTH;
 
     dpy = XOpenDisplay(NULL);
@@ -175,6 +180,57 @@ static void setup(void)
     c = XGetXCBConnection(dpy);
     scr = xcb_setup_roots_iterator(xcb_get_setup(c)).data;
     root = scr->root;
+
+    xcb_query_pointer_reply_t *pointer_reply = xcb_query_pointer_reply(c, xcb_query_pointer(c, root), NULL); 
+    int16_t ppx = pointer_reply->root_x;
+    int16_t ppy = pointer_reply->root_y;
+
+    if (!pointer_reply) {
+        cleanup();
+        die("Failed to get pointer reply\n");
+    }
+
+    xcb_randr_get_screen_resources_current_reply_t *res_reply = xcb_randr_get_screen_resources_current_reply(c, xcb_randr_get_screen_resources_current(c, root), NULL);
+
+    if (!res_reply) {
+        cleanup();
+        die("Failed to get screen resources reply\n");
+    }
+
+    int32_t len = xcb_randr_get_screen_resources_current_outputs_length(res_reply);
+    xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_current_outputs(res_reply);
+
+    for (int i = 0; i < len; ++i) {
+        xcb_randr_get_output_info_cookie_t output_cookie = xcb_randr_get_output_info(c, outputs[i], XCB_CURRENT_TIME);
+        xcb_randr_get_output_info_reply_t *output_reply = xcb_randr_get_output_info_reply(c, output_cookie, NULL);
+
+        if (!output_reply || output_reply->crtc == XCB_NONE) {
+            continue;
+        }
+
+        xcb_randr_get_crtc_info_cookie_t crtc_cookie = xcb_randr_get_crtc_info(c, output_reply->crtc, XCB_CURRENT_TIME);
+        xcb_randr_get_crtc_info_reply_t *crtc_reply = xcb_randr_get_crtc_info_reply(c, crtc_cookie, NULL);
+
+        if (!crtc_reply) {
+            free(output_reply);
+            continue;
+        }
+
+        if ((ppx >= crtc_reply->x) && (ppx <= crtc_reply->x + crtc_reply->width) &&
+            (ppy >= crtc_reply->y) && (ppy <= crtc_reply->y + crtc_reply->height)) {
+            mon_x = crtc_reply->x;
+            mon_y = crtc_reply->y;
+            mon_width = crtc_reply->width;
+            mon_height = crtc_reply->height;
+            break;
+        }
+
+        free(output_reply);
+        free(crtc_reply);
+    }
+
+    free(pointer_reply);
+    free(res_reply);
 
     wid = xcb_generate_id(c);
 
@@ -208,7 +264,7 @@ static void setup(void)
         XCB_COPY_FROM_PARENT,
         wid,
         root,
-        1920/2 - window_width/2, 1080/2 - window_height/2, window_width, window_height, 0,
+        mon_x + mon_width/2 - window_width/2, mon_y + mon_height/2 - window_height/2, window_width, window_height, 0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         scr->root_visual,
         value_mask, value_list
