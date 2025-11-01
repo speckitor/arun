@@ -1,4 +1,4 @@
-// arun configuration file
+/* arun configuration file */
 
 const char *fontname = "Adwaita Mono:pixelsize=24";
 

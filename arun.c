@@ -20,7 +20,7 @@
 
 #define MAX_BINS_SIZE 16384
 
-#define MAX_INPUT_SIZE 256
+#define MAX_INPUT_SIZE 257
 #define VALUE_LIST_SIZE 32
 
 typedef struct {
@@ -158,10 +158,6 @@ static void setup(void)
     }
 
     qsort(bins.all, bins.top, sizeof(char *), cmpstrs);
-
-    // for (size_t i = 0; i < bin_top; ++i) {
-    //     printf("%s\n", bins[i]);
-    // }
     
     bins.rrange_e = COMPLETIONS_NUMBER;
 
@@ -290,7 +286,7 @@ static void draw_input_bar(void)
         input_bar.rrange_s--;
         input_bar.rrange_e--;
     }
-
+    
     XftDrawStringUtf8(
         font_draw,
         &input_font_color,
@@ -370,20 +366,22 @@ static void draw_bin(const char *cmd, bool selected, int y)
     xcb_flush(c);
 }
 
-static void redraw_all() {
+static void redraw_all()
+{
     int dy = 2 * TEXT_OFFSET_Y + font->height;
     for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
-        printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
+        printf("Drawing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
         draw_bin(bins.drawable[i], bins.cursor == i, dy);
         dy += 2 * TEXT_OFFSET_Y + font->height;
     }
 }
 
-static void redraw_diff() {
+static void redraw_diff()
+{
     int dy = 2 * TEXT_OFFSET_Y + font->height;
     for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
         if (i == bins.cursor || i == bins.prevcursor) {
-            printf("Draiwing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
+            printf("Drawing bin: %s:%s\n", input_bar.buf, bins.drawable[i]);
             draw_bin(bins.drawable[i], bins.cursor == i, dy);
         }
         dy += 2 * TEXT_OFFSET_Y + font->height;
@@ -392,7 +390,7 @@ static void redraw_diff() {
 
 static void draw_bins(bool parse_bins)
 {
-    printf("Draiwing bins\n");
+    printf("Drawing bins\n");
     if (parse_bins) {
         bins.dtop = 0;
         for (size_t i = 0; i < bins.top; ++i) {
@@ -451,35 +449,7 @@ static bool handle_key_press(xcb_generic_event_t *ev)
     int len = XLookupString(&e, buf, sizeof(buf), &keysym, NULL);
     (void)len;
 
-    if (isprint(buf[0]) && input_bar.top < MAX_INPUT_SIZE) {
-        memccpy(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], '\0', input_bar.top - input_bar.cursor);
-        input_bar.buf[input_bar.cursor++] = buf[0];
-        input_bar.top++;
-        return true;
-    } else if (keysym == XK_BackSpace) {
-        if (input_bar.cursor) {
-            memcpy(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-            input_bar.cursor--;
-            input_bar.buf[input_bar.top - 1] = '\0';
-            input_bar.top--;
-        }
-        return true;
-    } else if (keysym == XK_Return) {
-        run_command();
-        input_bar.top = 0;
-        input_bar.cursor = 0;
-    } else if (keysym == XK_Down && bins.cursor + 1 < bins.dtop) {
-        bins.prevcursor = bins.cursor++;
-    } else if (keysym == XK_Up && bins.cursor > 0) {
-        bins.prevcursor = bins.cursor--;
-    } else if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
-        input_bar.cursor++;
-    } else if (keysym == XK_Left && input_bar.cursor > 0) {
-        input_bar.cursor--;
-    } else if (keysym == XK_Escape) {
-        cleanup();
-        exit(1);
-    } else if (e.state & XCB_MOD_MASK_CONTROL) {
+    if (e.state & XCB_MOD_MASK_CONTROL) {
         switch (keysym) {
         case 'f':
             if (input_bar.cursor < input_bar.top) input_bar.cursor++;
@@ -499,7 +469,145 @@ static bool handle_key_press(xcb_generic_event_t *ev)
                 input_bar.rrange_e = input_bar.top;
             }
             break;
+        case 'u':
+            if (input_bar.cursor > 0) {
+                memmove(input_bar.buf, &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
+                input_bar.top -= input_bar.cursor;
+                input_bar.buf[input_bar.top] = '\0';
+                input_bar.cursor = 0;
+                input_bar.rrange_s = 0;
+                input_bar.rrange_e = TEXT_LENGTH;
+                return true;
+            }
+            break;
+        case 'k':
+            input_bar.top = input_bar.cursor;
+            input_bar.buf[input_bar.top] = '\0';
+            if (input_bar.cursor > TEXT_LENGTH) {
+                input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
+                input_bar.rrange_e = input_bar.cursor;
+            } else {
+                input_bar.rrange_s = 0;
+                input_bar.rrange_e = TEXT_LENGTH;
+            }
+            return true;
+        case 'h':
+            if (input_bar.cursor > 0) {
+                memmove(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
+                input_bar.cursor--;
+                input_bar.buf[--input_bar.top] = '\0';
+                return true;
+            }
+            break;
+        case 'd':
+            if (input_bar.cursor < input_bar.top) {
+                memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[input_bar.cursor + 1], input_bar.top - input_bar.cursor);
+                input_bar.buf[--input_bar.top] = '\0';
+                return true;
+            }
+            break;
+        case 'w':
+            if (input_bar.cursor > 0) {
+                size_t i = input_bar.cursor - 1;
+                while ((i > 0) && ((input_bar.buf[i] == ' ') || (input_bar.buf[i - 1] != ' '))) i--;
+                memmove(&input_bar.buf[i], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
+                input_bar.top -= (input_bar.cursor - i);
+                input_bar.buf[input_bar.top] = '\0';
+                input_bar.cursor = i;
+                if (input_bar.cursor > TEXT_LENGTH) {
+                    input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
+                    input_bar.rrange_e = input_bar.cursor;
+                } else {
+                    input_bar.rrange_s = 0;
+                    input_bar.rrange_e = TEXT_LENGTH;
+                }
+                return true;
+            }
+            break;
         }
+    } else if (e.state & XCB_MOD_MASK_1) {
+        switch (keysym) {
+            case 'f':
+                if (input_bar.cursor == input_bar.top) break;
+                input_bar.cursor++;
+                while ((input_bar.cursor < input_bar.top) &&
+                        (input_bar.buf[input_bar.cursor] == ' ')) {
+                    input_bar.cursor++;
+                }
+                while ((input_bar.cursor < input_bar.top) &&
+                       (input_bar.buf[input_bar.cursor] != ' ')) {
+                    input_bar.cursor++;
+                }
+                if (input_bar.cursor > TEXT_LENGTH) {
+                    input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
+                    input_bar.rrange_e = input_bar.cursor;
+                }
+                break;
+            case 'b':
+                if (input_bar.cursor == 0) break;
+                input_bar.cursor--;
+                while ((input_bar.cursor > 0) &&
+                       ((input_bar.buf[input_bar.cursor] == ' ') ||
+                       (input_bar.buf[input_bar.cursor - 1] != ' '))) {
+                    input_bar.cursor--;
+                }
+                if (input_bar.cursor < input_bar.rrange_s) {
+                    input_bar.rrange_s = input_bar.cursor;
+                    input_bar.rrange_e = MIN(input_bar.cursor + TEXT_LENGTH, input_bar.top);
+                }
+                break;
+            case 'd':
+                if (input_bar.cursor < input_bar.top) {
+                    size_t i = input_bar.cursor;
+                    while ((i < input_bar.top) && (input_bar.buf[i] == ' ')) i++;
+                    while ((i < input_bar.top) && (input_bar.buf[i] != ' ')) i++;
+                    memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[i], input_bar.top - i);
+                    input_bar.top -= (i - input_bar.cursor);
+                    input_bar.buf[input_bar.top] = '\0';
+                    if (input_bar.cursor > TEXT_LENGTH) {
+                        input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
+                        input_bar.rrange_e = input_bar.cursor;
+                    } else {
+                        input_bar.rrange_s = 0;
+                        input_bar.rrange_e = TEXT_LENGTH;
+                    }
+                    return true;
+                }
+                break;
+        }
+    } else if (isprint(keysym) && input_bar.top < MAX_INPUT_SIZE) {
+        memmove(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
+        input_bar.buf[input_bar.cursor++] = keysym;
+        input_bar.top++;
+        return true;
+    } else if (keysym == XK_BackSpace) {
+        if (input_bar.cursor > 0) {
+            memmove(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
+            input_bar.cursor--;
+            input_bar.buf[--input_bar.top] = '\0';
+            return true;
+        }
+    } else if (keysym == XK_Delete) {
+        if (input_bar.cursor < input_bar.top) {
+            memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[input_bar.cursor + 1], input_bar.top - input_bar.cursor);
+            input_bar.buf[--input_bar.top] = '\0';
+            return true;
+        }
+    } else if (keysym == XK_Return) {
+        run_command();
+        input_bar.top = 0;
+        input_bar.cursor = 0;
+    } else if (keysym == XK_Down && bins.cursor + 1 < bins.dtop) {
+        bins.prevcursor = bins.cursor++;
+    } else if (keysym == XK_Up && bins.cursor > 0) {
+        bins.prevcursor = bins.cursor--;
+    } else if (keysym == XK_Right && input_bar.cursor < input_bar.top) {
+        input_bar.cursor++;
+    } else if (keysym == XK_Left && input_bar.cursor > 0) {
+        input_bar.cursor--;
+    } else if (keysym == XK_Escape) {
+        cleanup();
+        exit(1);
     }
 
     return false;
