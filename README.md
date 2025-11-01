@@ -16,18 +16,13 @@ gcc, make, xcb, xcb-randr, xcb-util-keysyms, xcb-randr, X11 (Xlib), X11-xcb (Xli
 
 Install arun
 
-- clone this repo and run
+- clone this repo and run `make`, then you can add it to your `/usr/local/bin`
 
 ```console
 make
-```
-
-- then you can add it to your /usr/local/bin
-
-```console
 sudo cp arun /usr/local/bin
 ```
 
 # Configuration
 
-Check `config.h` file. Has to be recompiled to apply configuration
+Check `config.h` file. Has to be recompiled to apply configuration.
