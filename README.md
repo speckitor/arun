@@ -11,7 +11,7 @@ Just an application runner. Goes through your $PATH and adds all binaries. Will 
 Dependencies
 
 ```console
-gcc, make, xcb, xcb-randr, xcb-util-keysyms, xcb-randr, X11 (Xlib), X11-xcb (Xlib-xcb), Xft, freetype2 (usually goes with Xft)
+gcc, make, pkg-config, xcb, xcb-randr, xcb-util-keysyms, xcb-randr, X11 (Xlib), X11-xcb (Xlib-xcb), Xft, freetype2 (usually goes with Xft)
 ```
 
 Install arun
