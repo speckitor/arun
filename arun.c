@@ -1,3 +1,4 @@
+#include <X11/Xutil.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -66,7 +67,7 @@ static xcb_window_t wid;
 static int window_width;
 static int window_height;
 
-static input_bar_t input_bar = {0};
+static input_bar_t input = {0};
 static xcb_gcontext_t input_bar_gc;
 static xcb_gcontext_t cursor_gc;
 
@@ -110,13 +111,25 @@ static void cleanup(void)
 static void run_command(void)
 {
     char *selected = strdup(bins.drawable[bins.cursor]);
-    cleanup();
-    if (strstr(selected, input_bar.buf) != NULL) {
-        execl("/bin/sh", "sh", "-c", selected, (char *)NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (strstr(selected, input.buf) != NULL) {
+            execl("/bin/sh", "sh", "-c", selected, (char *)NULL);
+        } else {
+            execl("/bin/sh", "sh", "-c", input.buf, (char *)NULL);
+        }
+        perror("execl");
+        _exit(EXIT_FAILURE);
+    } else if (pid < 0) {
+        perror("fork");
+        cleanup();
+        free(selected);
+        exit(1);
     } else {
-        execl("/bin/sh", "sh", "-c", input_bar.buf, (char *)NULL);
+        cleanup();
+        free(selected);
+        exit(0);
     }
-    free(selected);
 }
 
 static int cmpstrs(const void *p1, const void *p2)
@@ -166,7 +179,7 @@ static void setup(void)
     qsort(bins.all, bins.top, sizeof(char *), cmpstrs);
     
     bins.rrange_e = COMPLETIONS_NUMBER;
-    input_bar.rrange_e = TEXT_LENGTH;
+    input.rrange_e = TEXT_LENGTH;
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -301,30 +314,10 @@ static void setup(void)
     xcb_create_gc(c, selected_gc, root, value_mask, value_list);
 }
 
-static XKeyEvent cast_key_press_event(xcb_key_press_event_t *e)
-{
-    XKeyEvent xkey;
-    xkey.display = dpy;
-    xkey.window = e->event;
-    xkey.root = e->root;
-    xkey.subwindow = e->child;
-    xkey.time = e->time;
-    xkey.x = e->event_x;
-    xkey.y = e->event_y;
-    xkey.x_root = e->root_x;
-    xkey.y_root = e->root_y;
-    xkey.state = e->state;
-    xkey.keycode = e->detail;
-    xkey.same_screen = e->same_screen;
-    xkey.type = KeyPress;
-
-    return xkey;
-}
-
 static void draw_input_bar(void)
 {
     const xcb_rectangle_t rectangle[] = {
-        {0, 0, input_bar.width, input_bar.height}
+        {0, 0, input.width, input.height}
     };
 
     xcb_poly_fill_rectangle(
@@ -335,12 +328,12 @@ static void draw_input_bar(void)
         rectangle
     );
 
-    if (input_bar.cursor > input_bar.rrange_e) {
-        input_bar.rrange_s++;
-        input_bar.rrange_e++;
-    } else if (input_bar.cursor < input_bar.rrange_s || (input_bar.top < input_bar.rrange_e && input_bar.top > TEXT_LENGTH - 1)) {
-        input_bar.rrange_s--;
-        input_bar.rrange_e--;
+    if (input.cursor > input.rrange_e) {
+        input.rrange_s++;
+        input.rrange_e++;
+    } else if (input.cursor < input.rrange_s || (input.top < input.rrange_e && input.top > TEXT_LENGTH - 1)) {
+        input.rrange_s--;
+        input.rrange_e--;
     }
     
     XftDrawStringUtf8(
@@ -349,11 +342,11 @@ static void draw_input_bar(void)
         font,
         TEXT_OFFSET_X,
         TEXT_OFFSET_Y + (font->height / 1.25),
-        (const FcChar8 *)&input_bar.buf[input_bar.rrange_s],
-        MIN(TEXT_LENGTH, input_bar.top)
+        (const FcChar8 *)&input.buf[input.rrange_s],
+        MIN(TEXT_LENGTH, input.top)
     );
 
-    int cursor_factor = input_bar.cursor - input_bar.rrange_s;
+    int cursor_factor = input.cursor - input.rrange_s;
     const xcb_rectangle_t cursor[] = {
         {TEXT_OFFSET_X + font->max_advance_width * cursor_factor, TEXT_OFFSET_Y, 1, font->height}
     };
@@ -422,7 +415,7 @@ static void draw_bin(const char *cmd, bool selected, int y)
     xcb_flush(c);
 }
 
-static void redraw_all()
+static void redraw_all(void)
 {
     int dy = 2 * TEXT_OFFSET_Y + font->height;
     for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
@@ -431,7 +424,7 @@ static void redraw_all()
     }
 }
 
-static void redraw_diff()
+static void redraw_diff(void)
 {
     int dy = 2 * TEXT_OFFSET_Y + font->height;
     for (size_t i = bins.rrange_s; i < bins.rrange_e; ++i) {
@@ -447,7 +440,7 @@ static void draw_bins(bool parse_bins)
     if (parse_bins) {
         bins.dtop = 0;
         for (size_t i = 0; i < bins.top; ++i) {
-            if (strstr(bins.all[i], input_bar.buf) != NULL) {
+            if (strstr(bins.all[i], input.buf) != NULL) {
                 bins.drawable[bins.dtop++] = bins.all[i];
             }
         }
@@ -492,86 +485,104 @@ static void draw_bins(bool parse_bins)
     xcb_flush(c);
 }
 
+static XKeyEvent cast_key_press_event(xcb_key_press_event_t *e)
+{
+    XKeyEvent xkey;
+    xkey.display = dpy;
+    xkey.window = e->event;
+    xkey.root = e->root;
+    xkey.subwindow = e->child;
+    xkey.time = e->time;
+    xkey.x = e->event_x;
+    xkey.y = e->event_y;
+    xkey.x_root = e->root_x;
+    xkey.y_root = e->root_y;
+    xkey.state = e->state;
+    xkey.keycode = e->detail;
+    xkey.same_screen = e->same_screen;
+    xkey.type = KeyPress;
+
+    return xkey;
+}
+
 static bool handle_key_press(xcb_generic_event_t *ev)
 {
-    XKeyEvent e = cast_key_press_event((xcb_key_press_event_t*) ev);
-
+    XKeyEvent e = cast_key_press_event((xcb_key_press_event_t *)ev);
     char buf;
     KeySym keysym;
-    int len = XLookupString(&e, &buf, sizeof(buf), &keysym, NULL);
-    (void)len;
+    XLookupString(&e, &buf, 1, &keysym, NULL);
 
     if (e.state & XCB_MOD_MASK_CONTROL) {
         switch (keysym) {
         case XK_f:
-            if (input_bar.cursor < input_bar.top) input_bar.cursor++;
+            if (input.cursor < input.top) input.cursor++;
             break;
         case XK_b:
-            if (input_bar.cursor > 0) input_bar.cursor--;
+            if (input.cursor > 0) input.cursor--;
             break;
         case XK_a:
-            input_bar.cursor = 0;
-            input_bar.rrange_s = 0;
-            input_bar.rrange_e = TEXT_LENGTH;
+            input.cursor = 0;
+            input.rrange_s = 0;
+            input.rrange_e = TEXT_LENGTH;
             break;
         case XK_e:
-            input_bar.cursor = input_bar.top;
-            if (input_bar.top > TEXT_LENGTH) {
-                input_bar.rrange_s = input_bar.top - TEXT_LENGTH;
-                input_bar.rrange_e = input_bar.top;
+            input.cursor = input.top;
+            if (input.top > TEXT_LENGTH) {
+                input.rrange_s = input.top - TEXT_LENGTH;
+                input.rrange_e = input.top;
             }
             break;
         case XK_u:
-            if (input_bar.cursor > 0) {
-                memmove(input_bar.buf, &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-                input_bar.top -= input_bar.cursor;
-                input_bar.buf[input_bar.top] = '\0';
-                input_bar.cursor = 0;
-                input_bar.rrange_s = 0;
-                input_bar.rrange_e = TEXT_LENGTH;
+            if (input.cursor > 0) {
+                memmove(input.buf, &input.buf[input.cursor], input.top - input.cursor);
+                input.top -= input.cursor;
+                input.buf[input.top] = '\0';
+                input.cursor = 0;
+                input.rrange_s = 0;
+                input.rrange_e = TEXT_LENGTH;
                 return true;
             }
             break;
         case XK_k:
-            input_bar.top = input_bar.cursor;
-            input_bar.buf[input_bar.top] = '\0';
-            if (input_bar.cursor > TEXT_LENGTH) {
-                input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
-                input_bar.rrange_e = input_bar.cursor;
+            input.top = input.cursor;
+            input.buf[input.top] = '\0';
+            if (input.cursor > TEXT_LENGTH) {
+                input.rrange_s = input.cursor - TEXT_LENGTH;
+                input.rrange_e = input.cursor;
             } else {
-                input_bar.rrange_s = 0;
-                input_bar.rrange_e = TEXT_LENGTH;
+                input.rrange_s = 0;
+                input.rrange_e = TEXT_LENGTH;
             }
             return true;
         case XK_h:
-            if (input_bar.cursor > 0) {
-                memmove(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-                input_bar.cursor--;
-                input_bar.buf[--input_bar.top] = '\0';
+            if (input.cursor > 0) {
+                memmove(&input.buf[input.cursor - 1], &input.buf[input.cursor], input.top - input.cursor);
+                input.cursor--;
+                input.buf[--input.top] = '\0';
                 return true;
             }
             break;
         case XK_d:
-            if (input_bar.cursor < input_bar.top) {
-                memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[input_bar.cursor + 1], input_bar.top - input_bar.cursor);
-                input_bar.buf[--input_bar.top] = '\0';
+            if (input.cursor < input.top) {
+                memmove(&input.buf[input.cursor], &input.buf[input.cursor + 1], input.top - input.cursor);
+                input.buf[--input.top] = '\0';
                 return true;
             }
             break;
         case XK_w:
-            if (input_bar.cursor > 0) {
-                size_t i = input_bar.cursor - 1;
-                while ((i > 0) && ((input_bar.buf[i] == ' ') || (input_bar.buf[i - 1] != ' '))) i--;
-                memmove(&input_bar.buf[i], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-                input_bar.top -= (input_bar.cursor - i);
-                input_bar.buf[input_bar.top] = '\0';
-                input_bar.cursor = i;
-                if (input_bar.cursor > TEXT_LENGTH) {
-                    input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
-                    input_bar.rrange_e = input_bar.cursor;
+            if (input.cursor > 0) {
+                size_t i = input.cursor - 1;
+                while ((i > 0) && ((input.buf[i] == ' ') || (input.buf[i - 1] != ' '))) i--;
+                memmove(&input.buf[i], &input.buf[input.cursor], input.top - input.cursor);
+                input.top -= (input.cursor - i);
+                input.buf[input.top] = '\0';
+                input.cursor = i;
+                if (input.cursor > TEXT_LENGTH) {
+                    input.rrange_s = input.cursor - TEXT_LENGTH;
+                    input.rrange_e = input.cursor;
                 } else {
-                    input_bar.rrange_s = 0;
-                    input_bar.rrange_e = TEXT_LENGTH;
+                    input.rrange_s = 0;
+                    input.rrange_e = TEXT_LENGTH;
                 }
                 return true;
             }
@@ -580,72 +591,67 @@ static bool handle_key_press(xcb_generic_event_t *ev)
     } else if (e.state & XCB_MOD_MASK_1) {
         switch (keysym) {
             case XK_f:
-                if (input_bar.cursor == input_bar.top) break;
-                input_bar.cursor++;
-                while ((input_bar.cursor < input_bar.top) &&
-                        (input_bar.buf[input_bar.cursor] == ' ')) {
-                    input_bar.cursor++;
+                if (input.cursor == input.top) break;
+                input.cursor++;
+                while ((input.cursor < input.top) &&
+                        (input.buf[input.cursor] == ' ')) {
+                    input.cursor++;
                 }
-                while ((input_bar.cursor < input_bar.top) &&
-                       (input_bar.buf[input_bar.cursor] != ' ')) {
-                    input_bar.cursor++;
+                while ((input.cursor < input.top) &&
+                       (input.buf[input.cursor] != ' ')) {
+                    input.cursor++;
                 }
-                if (input_bar.cursor > TEXT_LENGTH) {
-                    input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
-                    input_bar.rrange_e = input_bar.cursor;
+                if (input.cursor > TEXT_LENGTH) {
+                    input.rrange_s = input.cursor - TEXT_LENGTH;
+                    input.rrange_e = input.cursor;
                 }
                 break;
             case XK_b:
-                if (input_bar.cursor == 0) break;
-                input_bar.cursor--;
-                while ((input_bar.cursor > 0) &&
-                       ((input_bar.buf[input_bar.cursor] == ' ') ||
-                       (input_bar.buf[input_bar.cursor - 1] != ' '))) {
-                    input_bar.cursor--;
+                if (input.cursor == 0) break;
+                input.cursor--;
+                while ((input.cursor > 0) &&
+                       ((input.buf[input.cursor] == ' ') ||
+                       (input.buf[input.cursor - 1] != ' '))) {
+                    input.cursor--;
                 }
-                if (input_bar.cursor < input_bar.rrange_s) {
-                    input_bar.rrange_s = input_bar.cursor;
-                    input_bar.rrange_e = MIN(input_bar.cursor + TEXT_LENGTH, input_bar.top);
+                if (input.cursor < input.rrange_s) {
+                    input.rrange_s = input.cursor;
+                    input.rrange_e = MIN(input.cursor + TEXT_LENGTH, input.top);
                 }
                 break;
             case XK_d:
-                if (input_bar.cursor < input_bar.top) {
-                    size_t i = input_bar.cursor;
-                    while ((i < input_bar.top) && (input_bar.buf[i] == ' ')) i++;
-                    while ((i < input_bar.top) && (input_bar.buf[i] != ' ')) i++;
-                    memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[i], input_bar.top - i);
-                    input_bar.top -= (i - input_bar.cursor);
-                    input_bar.buf[input_bar.top] = '\0';
-                    if (input_bar.cursor > TEXT_LENGTH) {
-                        input_bar.rrange_s = input_bar.cursor - TEXT_LENGTH;
-                        input_bar.rrange_e = input_bar.cursor;
+                if (input.cursor < input.top) {
+                    size_t i = input.cursor;
+                    while ((i < input.top) && (input.buf[i] == ' ')) i++;
+                    while ((i < input.top) && (input.buf[i] != ' ')) i++;
+                    memmove(&input.buf[input.cursor], &input.buf[i], input.top - i);
+                    input.top -= (i - input.cursor);
+                    input.buf[input.top] = '\0';
+                    if (input.cursor > TEXT_LENGTH) {
+                        input.rrange_s = input.cursor - TEXT_LENGTH;
+                        input.rrange_e = input.cursor;
                     } else {
-                        input_bar.rrange_s = 0;
-                        input_bar.rrange_e = TEXT_LENGTH;
+                        input.rrange_s = 0;
+                        input.rrange_e = TEXT_LENGTH;
                     }
                     return true;
                 }
                 break;
         }
-    } else if (isprint(buf) && input_bar.top < MAX_INPUT_SIZE) {
-        memmove(&input_bar.buf[input_bar.cursor + 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-        input_bar.buf[input_bar.cursor++] = buf;
-        input_bar.top++;
-        return true;
     } else {
         switch (keysym) {
         case XK_BackSpace:
-            if (input_bar.cursor > 0) {
-                memmove(&input_bar.buf[input_bar.cursor - 1], &input_bar.buf[input_bar.cursor], input_bar.top - input_bar.cursor);
-                input_bar.cursor--;
-                input_bar.buf[--input_bar.top] = '\0';
+            if (input.cursor > 0) {
+                memmove(&input.buf[input.cursor - 1], &input.buf[input.cursor], input.top - input.cursor);
+                input.cursor--;
+                input.buf[--input.top] = '\0';
                 return true;
             }
             break;
         case XK_Delete:
-            if (input_bar.cursor < input_bar.top) {
-                memmove(&input_bar.buf[input_bar.cursor], &input_bar.buf[input_bar.cursor + 1], input_bar.top - input_bar.cursor);
-                input_bar.buf[--input_bar.top] = '\0';
+            if (input.cursor < input.top) {
+                memmove(&input.buf[input.cursor], &input.buf[input.cursor + 1], input.top - input.cursor);
+                input.buf[--input.top] = '\0';
                 return true;
             }
             break;
@@ -659,14 +665,22 @@ static bool handle_key_press(xcb_generic_event_t *ev)
             if (bins.cursor > 0) bins.prevcursor = bins.cursor--;
             break;
         case XK_Right:
-            if (input_bar.cursor < input_bar.top) input_bar.cursor++;
+            if (input.cursor < input.top) input.cursor++;
             break;
         case XK_Left:
-            if (input_bar.cursor > 0) input_bar.cursor--;
+            if (input.cursor > 0) input.cursor--;
             break;
         case XK_Escape:
             cleanup();
             exit(1);
+        default:
+            if (isprint(buf) && input.top < MAX_INPUT_SIZE) {
+                memmove(&input.buf[input.cursor + 1], &input.buf[input.cursor], input.top - input.cursor);
+                input.buf[input.cursor++] = buf;
+                input.top++;
+                return true;
+            }
+            break;
         }
     }
 
@@ -677,10 +691,10 @@ int main(void)
 {
     setup();
 
-    input_bar.width = window_width;
-    input_bar.height = font->height + TEXT_OFFSET_Y * 2;
-    input_bar.top = 0;
-    input_bar.cursor = 0;
+    input.width = window_width;
+    input.height = font->height + TEXT_OFFSET_Y * 2;
+    input.top = 0;
+    input.cursor = 0;
 
     xcb_map_window(c, wid);
 
